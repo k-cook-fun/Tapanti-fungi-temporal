@@ -1,0 +1,41 @@
+#sequence processing of Illumina MiSeq reads using usearch version 9.2, cutadapt, and RDP classifier
+
+#begin by downloading sequence files from GenBank - SRA accession PRJNA762332
+#unzip the .fastq files and move them into a single directory, here called seqs
+
+#
+cd seqs/
+rename 's/_//g' *
+rename 's/-//g' *
+rename 's/L001R1/_R1_/g' *
+rename 's/L001R2/_R2_/g' *
+rename 's/_001//g' *
+cd ..
+
+#merge paired reads with maximum 10bp or 10% differences, merged sequences must be 150 bp or longer
+usearch9 -fastq_mergepairs seqs/*_R1.fastq -fastqout merged.fq -fastq_minmergelen 150 -relabel @ -fastq_maxdiffs 10 -fastq_maxdiffpct 10 -fastq_trunctail 5 -report merge_report -tabbedout merge_tab
+
+#remove primers 1 at a time with cutadapt
+#sequences without a matching primer are discarded
+cutadapt -g ^AGCCTCCGCTTATTGATATGCTTAART -e 0.15 --discard-untrimmed -o no_f.fq merged.fq
+cutadapt -a AGWGATCCRTTGYYRAAAGTT$ -e 0.15 --discard-untrimmed -o trimmed.fq no_f.fq
+
+#quality filter, with maximum of 1 expected error
+usearch9 -fastq_filter trimmed.fq -fastq_maxee 1.0 -fastaout filtered.fa
+
+#dereplication
+usearch9 -fastx_uniques filtered.fa -sizeout -fastaout uniques.fa
+
+#cluster sequences into OTUs and filter chimeras in the same step
+usearch9 -cluster_otus uniques.fa -minsize 2 -otus otus.fa -relabel Otu
+
+#check OTUs for phiX contamination, none found
+usearch9 -filter_phix otus.fa -output nophix_otus.fa -alnout phix.txt
+
+#match reads to these OTUs at 97% and construct an OTU table
+usearch9 -usearch_global trimmed.fq -db otus.fa -strand plus -id 0.97 -otutabout otutab.txt -biomout otutab.json
+
+#use the RDP classifier, as implemented in QIIME 1, and the UNITE database to assign taxonomy to OTUS
+assign_taxonomy.py -i otus.fa -o UNITE_rdp_tax -m rdp -t 'UNITE/UNITE_10.10.2017/sh_taxonomy_qiime_ver7_97_10.10.2017.txt' -r 'UNITE/UNITE_10.10.2017/sh_refs_qiime_ver7_97_10.10.2017.fasta'
+
+
